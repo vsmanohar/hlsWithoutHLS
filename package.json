@@ -1,0 +1,41 @@
+{
+  "name": "haskell-simple-hover",
+  "displayName": "Haskell Simple Hover",
+  "description": "Simple hover definitions for Haskell",
+  "version": "0.0.1",
+  "publisher": "saimanohar",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/haskell-simple-hover"
+  },
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:haskell"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [{
+      "id": "haskell",
+      "extensions": [".hs"]
+    }]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "build": "npm run compile && npm run package",
+    "clean": "rm -rf out"
+  },
+  "devDependencies": {
+    "@types/node": "^16.0.0",
+    "@types/vscode": "^1.70.0",
+    "typescript": "^4.4.0",
+    "@vscode/vsce": "^2.15.0"
+  }
+}

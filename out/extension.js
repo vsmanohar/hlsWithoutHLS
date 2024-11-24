@@ -24,89 +24,107 @@ var __importStar = (this && this.__importStar) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.deactivate = exports.activate = void 0;
-// Extension Entry Point (src/extension.ts)
 const vscode = __importStar(require("vscode"));
 const child_process = __importStar(require("child_process"));
 const path = __importStar(require("path"));
 const util_1 = require("util");
 const exec = (0, util_1.promisify)(child_process.exec);
-// Cache to store found functions
 const functionCache = new Map();
-// Main activation function for the extension
+let statusBarItem;
 function activate(context) {
     console.log('Haskell Hover Extension is active');
-    // Build initial cache of functions in workspace
+    statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    context.subscriptions.push(statusBarItem);
     buildFunctionCache();
-    // Register hover provider
     let hoverProvider = vscode.languages.registerHoverProvider('haskell', {
         async provideHover(document, position) {
-            // Get the word under cursor
-            const wordRange = document.getWordRangeAtPosition(position);
-            if (!wordRange)
-                return;
-            const word = document.getText(wordRange);
-            // Try to get info from cache first
-            let info = functionCache.get(word);
-            // If not in cache, try GHCi
-            if (!info) {
-                info = await getGhciInfo(word);
+            try {
+                const wordRange = document.getWordRangeAtPosition(position);
+                if (!wordRange)
+                    return;
+                const word = document.getText(wordRange);
+                statusBarItem.text = `$(sync~spin) Loading type for: ${word}`;
+                statusBarItem.show();
+                let info = functionCache.get(word);
+                if (!info) {
+                    info = await getGhciInfo(word, document);
+                    if (info) {
+                        functionCache.set(word, info);
+                    }
+                }
+                statusBarItem.hide();
                 if (info) {
-                    functionCache.set(word, info);
+                    const hoverContent = [
+                        new vscode.MarkdownString(`**Function:** ${word}`),
+                        new vscode.MarkdownString(`**Type:**\n\`\`\`haskell\n${info.fullSignature || info.type}\n\`\`\``),
+                        new vscode.MarkdownString(`**Defined in:** ${info.location}`)
+                    ];
+                    return new vscode.Hover(hoverContent);
                 }
             }
-            // Return hover information if found
-            if (info) {
-                return new vscode.Hover([
-                    new vscode.MarkdownString(`**Function:** ${word}`),
-                    new vscode.MarkdownString(`**Type:** ${info.type}`),
-                    new vscode.MarkdownString(`**Defined in:** ${info.location}`)
-                ]);
+            catch (error) {
+                statusBarItem.hide();
+                console.error('Hover provider error:', error);
+                if (error instanceof Error && error.message.includes('GHCi')) {
+                    vscode.window.showErrorMessage(`GHCi error: ${error.message}`);
+                }
             }
         }
     });
     context.subscriptions.push(hoverProvider);
 }
 exports.activate = activate;
-// Build cache of functions in workspace
 async function buildFunctionCache() {
-    // Get all Haskell files in workspace
-    const files = await vscode.workspace.findFiles('**/*.hs');
-    for (const file of files) {
-        const content = await vscode.workspace.fs.readFile(file);
-        const text = Buffer.from(content).toString('utf8');
-        // Simple regex to find function definitions
-        // Note: This is a basic implementation - can be improved for more accuracy
-        const functionRegex = /^(\w+)\s*::\s*(.+?)$/gm;
-        let match;
-        while ((match = functionRegex.exec(text)) !== null) {
-            const [_, name, type] = match;
-            functionCache.set(name, {
-                type: type.trim(),
-                location: path.basename(file.fsPath)
-            });
+    try {
+        const files = await vscode.workspace.findFiles('**/*.hs');
+        for (const file of files) {
+            const content = await vscode.workspace.fs.readFile(file);
+            const text = Buffer.from(content).toString('utf8');
+            // Updated regex to capture multi-line type signatures
+            const functionRegex = /^(\w+)\s*::\s*(.+?)(?=^\w+\s*::|\n\n|$)/gms;
+            let match;
+            while ((match = functionRegex.exec(text)) !== null) {
+                const [fullMatch, name, type] = match;
+                functionCache.set(name, {
+                    type: type.trim().split('\n')[0],
+                    fullSignature: `${name} :: ${type.trim()}`,
+                    location: path.basename(file.fsPath)
+                });
+            }
         }
     }
+    catch (error) {
+        console.error('Error building function cache:', error);
+    }
 }
-// Get type information from GHCi
-async function getGhciInfo(symbol) {
+async function getGhciInfo(symbol, document) {
     try {
-        // Run :type command in GHCi
-        const { stdout } = await exec(`echo ":type ${symbol}" | ghci`);
-        // Parse GHCi output
-        const typeMatch = stdout.match(new RegExp(`${symbol} :: (.+)$`, 'm'));
+        const loadResult = await exec(`echo ":load \\"${document.fileName}\\"" | ghci -v0`);
+        if (loadResult.stderr && !loadResult.stderr.includes('Ok,')) {
+            throw new Error(`Failed to load file: ${loadResult.stderr}`);
+        }
+        const { stdout, stderr } = await exec(`echo ":info ${symbol}" | ghci -v0`);
+        if (stderr && !stderr.includes('Ok,')) {
+            throw new Error(stderr);
+        }
+        // Updated regex to capture the complete type signature
+        const typeMatch = stdout.match(new RegExp(`${symbol} :: ([\\s\\S]+?)(?=\\n\\s*--|\n\\s*$)`));
         if (typeMatch) {
             return {
-                type: typeMatch[1].trim(),
-                location: 'GHCi'
+                type: typeMatch[1].trim().split('\n')[0],
+                fullSignature: `${symbol} :: ${typeMatch[1].trim()}`,
+                location: path.basename(document.fileName)
             };
         }
     }
     catch (error) {
         console.error('GHCi error:', error);
+        throw error;
     }
     return undefined;
 }
-// Deactivation hook
-function deactivate() { }
+function deactivate() {
+    statusBarItem.dispose();
+}
 exports.deactivate = deactivate;
 //# sourceMappingURL=extension.js.map
